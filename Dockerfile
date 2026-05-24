@@ -1,7 +1,7 @@
 FROM alpine:latest
 
-# 安装证书、时区和 cron 守护进程
-RUN apk --no-cache add ca-certificates tzdata crond
+# 安装证书和时区数据（crond 已经是系统自带，无须再打包下载）
+RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /app
 
