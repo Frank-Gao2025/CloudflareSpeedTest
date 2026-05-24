@@ -1,0 +1,80 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch: # 允许你手动在 GitHub 页面上点击按钮触发构建
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/tools/godotenv@v2 # 或者是 actions/setup-go@v5
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21' # 保持与工程 go.mod 要求的版本兼容
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+
+      # 创建用于 Docker 镜像的轻量化运行环境
+      - name: Create Dockerfile
+        run: |
+          cat << 'EOF' > Dockerfile
+          FROM alpine:latest
+          RUN apk --no-cache add ca-certificates tzdata crond
+          WORKDIR /app
+          # 从仓库中复制必要的 IP 数据文件
+          COPY ip.txt ipv6.txt ./
+          # 编写容器启动和定时任务的脚本
+          echo '#!/bin/sh' > /app/entrypoint.sh
+          echo 'if [ -n "$CRON_EXPR" ]; then' >> /app/entrypoint.sh
+          echo '  echo "$CRON_EXPR /app/cfst $ARGS" > /var/spool/cron/crontabs/root' >> /app/entrypoint.sh
+          echo '  echo "Cron job scheduled: $CRON_EXPR"' >> /app/entrypoint.sh
+          echo '  # 启动时先执行一次测速' >> /app/entrypoint.sh
+          echo '  /app/cfst $ARGS' >> /app/entrypoint.sh
+          echo '  exec crond -f -l 2' >> /app/entrypoint.sh
+          echo 'else' >> /app/entrypoint.sh
+          echo '  exec /app/cfst $ARGS' >> /app/entrypoint.sh
+          echo 'fi' >> /app/entrypoint.sh
+          chmod +x /app/entrypoint.sh
+          ENTRYPOINT ["/app/entrypoint.sh"]
+          EOF
+
+      - name: Build binary
+        run: |
+          # 编译成适合 Alpine 运行的 Linux CGO-disabled 二进制文件
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=v2.3.5-fork" -o cfst
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
