@@ -26,11 +26,9 @@ jobs:
         with:
           go-version: '1.21'
 
-      # 1. 【新增】初始化 QEMU，用于支持多架构交叉编译（比如群晖/优酷/威联通各种芯片）
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # 2. 【新增】初始化 Docker Buildx（这是解决刚才失败的关键）
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -49,38 +47,17 @@ jobs:
           tags: |
             type=raw,value=latest
 
-      - name: Create Dockerfile
-        run: |
-          cat << 'EOF' > Dockerfile
-          FROM alpine:latest
-          RUN apk --no-cache add ca-certificates tzdata crond
-          WORKDIR /app
-          COPY ip.txt ipv6.txt ./
-          echo '#!/bin/sh' > /app/entrypoint.sh
-          echo 'if [ -n "$CRON_EXPR" ]; then' >> /app/entrypoint.sh
-          echo '  echo "$CRON_EXPR /app/cfst \$ARGS" > /var/spool/cron/crontabs/root' >> /app/entrypoint.sh
-          echo '  echo "Cron job scheduled: $CRON_EXPR"' >> /app/entrypoint.sh
-          echo '  /app/cfst \$ARGS' >> /app/entrypoint.sh
-          echo '  exec crond -f -l 2' >> /app/entrypoint.sh
-          echo 'else' >> /app/entrypoint.sh
-          echo '  exec /app/cfst \$ARGS' >> /app/entrypoint.sh
-          echo 'fi' >> /app/entrypoint.sh
-          chmod +x /app/entrypoint.sh
-          ENTRYPOINT ["/app/entrypoint.sh"]
-          EOF
-
       - name: Build binary
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=v2.3.5-fork" -o cfst
 
-      # 3. 使用完全激活的 Buildx 执行构建与推送
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 显式指定构建缓存，提高后续构建速度
           cache-from: type=gha
           cache-to: type=gha,mode=max
